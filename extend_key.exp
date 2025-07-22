@@ -1,0 +1,12 @@
+#!/usr/bin/expect -f
+                spawn gpg --edit-key 7711B10DBF53D3D585C8BE173F1CAE3E8BBB25CC
+                expect "gpg>"
+                send "expire\r"
+                expect "Key is valid for"
+                send "2y\r"
+                expect "Is this correct"
+                send "y\r"
+                expect "gpg>"
+                send "save\r"
+                expect eof
+                

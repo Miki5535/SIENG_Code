@@ -1,0 +1,39 @@
+git add .
+git commit -m "Updated"
+
+git branch -M main
+git push origin main
+
+
+
+
+
+setx PATH "%PATH%;C:\exiftool"
+
+
+ffmpeg -i input_video.mp4 -metadata "comment=HiddenMessage" -codec copy output_video.mp4
+
+ffmpeg -i output_video.mp4
+
+exiftool output_video.mp4
+
+
+
+
+
+
+pip install 
+
+pyinstaller  --windowed --icon="C:\\Users\\65011\\Desktop\\Segano\\work00002\\myicon.ico" --clean "C:\\Users\\65011\\Desktop\\Segano\\work00002\\main.py"
+
+
+pyinstaller --onefile --windowed ^
+--add-data "C:\\Users\\65011\\Desktop\\Segano\\work00002\\audioexample:audioexample" ^
+--add-data "C:\\Users\\65011\\Desktop\\Segano\\work00002\\photoexample:photoexample" ^
+--add-data "C:\\Users\\65011\\Desktop\\Segano\\work00002\\tabs:tabs" ^
+--add-data "C:\\Users\\65011\\Desktop\\Segano\\work00002\\utils:utils" ^
+--add-data "C:\\Users\\65011\\Desktop\\Segano\\work00002\\vdio:vdio" ^
+--add-data "C:\\Users\\65011\\Desktop\\Segano\\work00002\\icom.png:." ^
+--add-data "C:\\Users\\65011\\Desktop\\Segano\\work00002\\myicon_in.ico:." ^
+--icon="C:\\Users\\65011\\Desktop\\Segano\\work00002\\myicon.ico" --clean "C:\\Users\\65011\\Desktop\\Segano\\work00002\\main.py"
+
