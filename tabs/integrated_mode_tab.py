@@ -482,6 +482,14 @@ class IntegrationTab(QWidget):
         
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+            } """)
+        
+        
         container_widget = QWidget()
         main_layout = QVBoxLayout(container_widget)
         main_layout.setSpacing(15)
