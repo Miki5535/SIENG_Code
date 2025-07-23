@@ -45,8 +45,9 @@ class MarqueeLabel(QLabel):
         painter.drawText(x + text_width + 50, y, self._text)
 
 class EnhancedSteganographyApp(QWidget):
-    def __init__(self):
+    def __init__(self,pgp_tab_instance):
         super().__init__()
+        self.pgp_tab = pgp_tab_instance
         self.setWindowTitle("SIENG : Secure Incognito ENcryption Guard")
         self.setGeometry(100, 100, 1400, 900)
         
@@ -281,10 +282,11 @@ class EnhancedSteganographyApp(QWidget):
                 'tooltip': 'Advanced encryption and decryption tools'
             },
             {
-                'widget': pgp_tab.PGPTab(),
-                'title': '🔑 PGP Security',
-                'tooltip': 'PGP encryption and digital signatures'
-            },
+    'widget': self.pgp_tab, 
+    'title': '🔑 PGP Security',
+    'tooltip': 'PGP encryption and digital signatures'
+},
+
             {
                 'widget': integrated_mode_tab.IntegrationTab(),
                 'title': '🔗 Integration',
@@ -449,7 +451,17 @@ if __name__ == '__main__':
     QTimer.singleShot(5000, splash.close)
 
    
-    window = EnhancedSteganographyApp()
+    # เตรียม pgp tab ล่วงหน้า
+    preloaded_pgp_tab = pgp_tab.PGPTab()
+    try:
+        preloaded_pgp_tab.initialize_pgp()
+        print("✅ PGP initialized successfully")
+    except Exception as e:
+        print(f"❌ Failed to initialize PGP: {e}")
+
+    # ส่ง instance ที่โหลดไว้เข้าไปในหน้าต่างหลัก
+    window = EnhancedSteganographyApp(preloaded_pgp_tab)
     window.show()
+
 
     sys.exit(app.exec_())
