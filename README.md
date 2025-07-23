@@ -1,4 +1,4 @@
-git add .
-git commit -m "Updated"
-git branch -M main
-git push origin main
+ใช้ python 3.11.0
+
+ใช้ lib ใน requirements.txt
+  pip install -r requirements.txt
