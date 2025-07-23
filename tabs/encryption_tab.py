@@ -507,8 +507,8 @@ class EncryptionTab(QWidget):
             output_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "key_output")
             os.makedirs(output_dir, exist_ok=True)
             timestamp = int(time.time())
-            private_key_path = os.path.join(output_dir, f"private_key_{timestamp}.pem")
-            public_key_path = os.path.join(output_dir, f"public_key_{timestamp}.pem")
+            private_key_path = os.path.join(output_dir, f"private_key.pem")
+            public_key_path = os.path.join(output_dir, f"public_key.pem")
             with open(private_key_path, "w") as f:
                 f.write(private_key_pem)
             with open(public_key_path, "w") as f:
@@ -516,8 +516,8 @@ class EncryptionTab(QWidget):
             self.rsa_private_key_input.setPlainText(private_key_pem)
             self.rsa_public_key_input.setPlainText(public_key_pem)
             self.aes_result_output.append(f"<span style='color: #00ff88;'>✅ RSA key pair generated and saved to <font color='#00d4ff'>{os.path.basename(output_dir)}</font></span>")
-            self.aes_result_output.append(f"  - Private Key: {os.path.basename(private_key_path)}")
-            self.aes_result_output.append(f"  - Public Key: {os.path.basename(public_key_path)}")
+            self.aes_result_output.append(f"  - Private Key: {private_key_path}")
+            self.aes_result_output.append(f"  - Public Key: {public_key_path}")
         except Exception as e:
             self.aes_result_output.append(f"<span style='color: #ff4444;'>❌ Error generating RSA keys: {str(e)}</span>")
 

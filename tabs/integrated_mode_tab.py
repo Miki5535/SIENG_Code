@@ -1781,9 +1781,10 @@ class IntegrationTab(QWidget):
 
             # ตั้งชื่อไฟล์ผลลัพธ์
             out_img_name = f"stego_img_{uuid.uuid4().hex[:8]}.png"
-            out_audio_dir = os.path.join(output_dir, "audio_output")
-            os.makedirs(out_audio_dir, exist_ok=True)
             out_img_path = os.path.join(output_dir, out_img_name)
+            
+            # out_audio_dir = os.path.join(output_dir, "audio_output")
+            # os.makedirs(out_audio_dir, exist_ok=True)
 
             # ซ่อนในภาพ
             success_img = self.hide_lsb_image(image_file, p1, out_img_path)
@@ -1791,7 +1792,9 @@ class IntegrationTab(QWidget):
                 raise RuntimeError("ล้มเหลวในการซ่อนข้อมูลในภาพ")
 
             # ซ่อนในเสียง
-            out_audio_path = self.hide_lsb_audio(audio_file, p2, out_audio_dir)
+            # out_audio_path = self.hide_lsb_audio(audio_file, p2, out_audio_dir)
+            out_audio_path = self.hide_lsb_audio(audio_file, p2, output_dir)
+
             if not out_audio_path:
                 raise RuntimeError("ล้มเหลวในการซ่อนข้อมูลในเสียง")
 
@@ -2727,7 +2730,7 @@ class IntegrationTab(QWidget):
             print(f"[ERROR] hide_lsb_image: {e}")
             return False
 
-    def hide_lsb_audio(self, audio_path, data, out_dir="audio_output"):
+    def hide_lsb_audio(self, audio_path, data, out_dir):
         if not os.path.exists(audio_path) or not data.strip():
             return None
         ext = os.path.splitext(audio_path)[1].lower()

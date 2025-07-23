@@ -770,9 +770,26 @@ class PGPTab(QWidget):
                         "gpg", "--batch", "--yes", "--import", temp_pub_key
                     ], env=env, capture_output=True, text=True)
                     if result.returncode != 0:
-                        self.rsa_result_output.append(
+                        print(
                             f"<span style='color: #ffcc00;'>⚠️ ไม่สามารถนำเข้า public key: {result.stderr.strip()}</span>"
                         )
+                        stderr = result.stderr.lower()
+                        if "premature eof" in stderr or "invalid keyring" in stderr:
+                            self.rsa_result_output.append(
+                                "  <span style='color: #ffcc00;'>ข้อผิดพลาด: ไฟล์กุญแจเสียหาย หรือ ไม่สมบูรณ์</span>"
+                            )
+                        elif "no valid openpgp data found" in stderr:
+                            self.rsa_result_output.append(
+                                "  <span style='color: #ffcc00;'>ข้อผิดพลาด: ไฟล์กุญแจไม่ใช่รูปแบบ PGP ที่ถูกต้อง</span>"
+                            )
+                        else:
+                            self.rsa_result_output.append(
+                                f"  <span style='color: #ffcc00;'>ข้อผิดพลาด: {result.stderr.strip()}</span>"
+                            )
+                        return
+                            
+                            
+                            
 
                 # บันทึกลายเซ็นลงไฟล์ชั่วคราว
                 sig_path = os.path.join(gnupg_home, "signature.asc")
@@ -815,13 +832,35 @@ class PGPTab(QWidget):
                     self.rsa_result_output.append(f"  ผู้ลงนาม: <span style='color:#00d4ff;'>{username}</span>")
                     self.rsa_result_output.append(f"  รหัสกุญแจ: <span style='color:#00d4ff;'>{key_id}</span>")
                 else:
-                    self.rsa_result_output.append("<span style='color: #ff4444;'>❌ ลายเซ็นไม่ถูกต้อง หรือ ไม่สามารถตรวจสอบได้</span>")
-                    if "no valid OpenPGP data found" in result.stderr:
+                    print("<span style='color: #ff4444;'>❌ ลายเซ็นไม่ถูกต้อง หรือ ไม่สามารถตรวจสอบได้</span>")
+                    stderr = result.stderr.lower()
+
+                    if "no valid openpgp data found" in stderr:
                         self.rsa_result_output.append("  <span style='color: #ffcc00;'>ข้อผิดพลาด: ลายเซ็นไม่ใช่รูปแบบ PGP ที่ถูกต้อง</span>")
-                    elif "bad signature" in result.stderr:
-                        self.rsa_result_output.append("  <span style='color: #ffcc00;'>ข้อผิดพลาด: ลายเซ็นไม่ตรงกับข้อมูล</span>")
+
+                    elif "bad signature" in stderr:
+                        self.rsa_result_output.append("  <span style='color: #ffcc00;'>ข้อผิดพลาด: ลายเซ็นไม่ตรงกับข้อมูลต้นฉบับ</span>")
+
+                    elif "can't check signature: no public key" in stderr:
+                        self.rsa_result_output.append("  <span style='color: #ffcc00;'>ข้อผิดพลาด: ไม่มี public key สำหรับตรวจสอบลายเซ็น</span>")
+
+                    elif "no signed data" in stderr:
+                        self.rsa_result_output.append("  <span style='color: #ffcc00;'>ข้อผิดพลาด: ข้อมูลที่ให้มาตรวจสอบไม่มีลายเซ็น</span>")
+
+                    elif "decryption failed" in stderr:
+                        self.rsa_result_output.append("  <span style='color: #ffcc00;'>ข้อผิดพลาด: ไม่สามารถถอดรหัสลายเซ็นได้ (อาจเป็นไฟล์ที่เข้ารหัส)</span>")
+
+                    elif "can't parse" in stderr or "invalid packet" in stderr:
+                        self.rsa_result_output.append("  <span style='color: #ffcc00;'>ข้อผิดพลาด: รูปแบบของลายเซ็นผิดหรือไฟล์เสียหาย</span>")
+
+                    elif "not certified with a trusted signature" in stderr:
+                        self.rsa_result_output.append("  <span style='color: #ffaa00;'>⚠️ คำเตือน: ลายเซ็นนี้ไม่ถูก trust อย่างเป็นทางการ</span>")
+                    elif "no signature found" in stderr or "premature eof" in stderr:
+                        self.rsa_result_output.append("  <span style='color: #ffcc00;'>ข้อผิดพลาด: ไม่พบลายเซ็น หรือไฟล์ลายเซ็นไม่สมบูรณ์</span>")
+
                     else:
                         self.rsa_result_output.append(f"  <span style='color: #ffcc00;'>ข้อผิดพลาด: {result.stderr.strip()}</span>")
+
 
         except Exception as e:
             self.rsa_result_output.append(f"<span style='color: #ff4444;'>❌ เกิดข้อผิดพลาด: {str(e)}</span>")
