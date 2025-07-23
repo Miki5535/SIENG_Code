@@ -5,6 +5,7 @@ import hashlib
 import random
 import string
 import subprocess
+import time
 import uuid
 from datetime import datetime
 
@@ -42,6 +43,8 @@ from mutagen.wave import WAVE
 
 import numpy as np
 import wave
+
+from tabs.video_tab import VideoSteganographyWorker
 
 
 
@@ -1117,6 +1120,10 @@ class IntegrationTab(QWidget):
         
         self.config_layout.addLayout(layout)
 
+
+
+
+
     def create_mode4_config(self):
         """Configuration for Mode 4: AES + RSA + Metadata"""
         layout = QGridLayout()
@@ -1766,8 +1773,8 @@ class IntegrationTab(QWidget):
             iv_b64, ct_b64, _, encrypted_b64 = self.encrypt_aes(text, key_str)
 
             key_b64 = base64.b64encode(key_str.encode()).decode()
-            self.result_display.append(f"<span style='color: #00d4ff;'>🔑 Key (Base64): {key_b64}</span>")
-            self.result_display.append(f"<span style='color: #00d4ff;'>🔒 Encrypted (Base64): {encrypted_b64[:60]}...</span>")
+            self.result_display.append(f"<span style='color: #00d4ff;'>🔑 Key (string): {key_str}</span>")
+            # self.result_display.append(f"<span style='color: #00d4ff;'>🔒 Encrypted (Base64): {encrypted_b64[:60]}...</span>")
 
             # แบ่งข้อความ
             p1, p2 = self.split_msg(encrypted_b64, 2)
@@ -1800,6 +1807,8 @@ class IntegrationTab(QWidget):
         except Exception as e:
             self.result_display.append(f"<span style='color: #ff4444;'>❌ ข้อผิดพลาด: {str(e)}</span>")
             raise
+
+
 
 
     def execute_mode2(self, item):
@@ -1889,10 +1898,112 @@ class IntegrationTab(QWidget):
 
 
     def execute_mode3(self, item):
-        """Mode 3: AES + Split 3 Parts"""
-        # Placeholder: Implement AES encryption and split into 3 parts
-        self.result_display.append("<span style='color: #ffeb3b;'>⚠️ Mode 3: รอการพัฒนา (AES + Split 3 Parts)</span>")
-        # TODO: Split text into 3 parts, encrypt with AES, embed in image, audio, video
+        """Mode 3: Encrypt with AES → Split into 3 parts → Hide in Image + Audio + Video"""
+        config = item.config
+        text = config.get('text', '').strip()
+        files = item.source_files
+        output_dir = self.output_path
+
+        if not text:
+            raise ValueError("ไม่พบข้อความสำหรับซ่อน")
+
+        if len(files) < 3:
+            raise ValueError("ต้องเลือกอย่างน้อย 1 ไฟล์ภาพ, 1 ไฟล์เสียง, และ 1 ไฟล์วิดีโอ")
+
+        # แยกไฟล์ตามประเภท
+        image_file = audio_file = video_file = None
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext in ['.png', '.jpg', '.jpeg'] and not image_file:
+                image_file = f
+            elif ext in ['.wav', '.mp3', '.flac', '.ogg', '.aac'] and not audio_file:
+                audio_file = f
+            elif ext in ['.mp4', '.avi', '.mov', '.mkv'] and not video_file:
+                video_file = f
+
+        if not image_file:
+            raise ValueError("ไม่พบไฟล์ภาพ (รองรับ .png, .jpg)")
+        if not audio_file:
+            raise ValueError("ไม่พบไฟล์เสียง (รองรับ .wav, .mp3)")
+        if not video_file:
+            raise ValueError("ไม่พบไฟล์วิดีโอ (รองรับ .mp4, .avi, .mov, .mkv)")
+
+        try:
+            print("[INFO] Encrypting and hiding data (Mode 3)...")
+
+            # กำหนด key
+            if config.get('random_aes_m3', False):
+                key_str = self.gen_secure_key()
+            else:
+                password = config.get('aes_password_m3', '').strip()
+                if not password:
+                    raise ValueError("กรุณากรอกรหัสผ่าน AES หรือเลือก 'สุ่ม'")
+                key_str = self.stretch_key(password)
+
+            # เข้ารหัส
+            iv_b64, ct_b64, _, encrypted_b64 = self.encrypt_aes(text, key_str)
+            key_b64 = base64.b64encode(key_str.encode()).decode()
+            self.result_display.append(f"<span style='color: #00d4ff;'>🔑 Key (string): {key_str}</span>")
+
+            # แบ่งข้อมูลเป็น 3 ส่วน
+            if config.get('custom_split_m3', False):
+                image_ratio = config.get('image_ratio', 33)
+                audio_ratio = config.get('audio_ratio', 33)
+                video_ratio = config.get('video_ratio', 34)
+                parts = self.split_msg_by_ratio(encrypted_b64, [image_ratio, audio_ratio, video_ratio])
+            else:
+                parts = self.split_msg(encrypted_b64, 3)
+
+            part_img, part_audio, part_video = parts
+
+            # 🔹 ซ่อนในภาพ
+            out_img_name = f"stego_img_{uuid.uuid4().hex[:8]}.png"
+            out_img_path = os.path.join(output_dir, out_img_name)
+            success_img = self.hide_lsb_image(image_file, part_img, out_img_path)
+            if not success_img:
+                raise RuntimeError("ล้มเหลวในการซ่อนข้อมูลในภาพ")
+
+            # 🔹 ซ่อนในเสียง
+            out_audio_dir = os.path.join(output_dir, "audio_output_m3")
+            os.makedirs(out_audio_dir, exist_ok=True)
+            out_audio_path = self.hide_lsb_audio(audio_file, part_audio, out_audio_dir)
+            if not out_audio_path:
+                raise RuntimeError("ล้มเหลวในการซ่อนข้อมูลในเสียง")
+
+            # 🔹 ซ่อนในวิดีโอ (ใช้ thread เหมือนเดิม)
+            filename = os.path.splitext(os.path.basename(video_file))[0]
+            timestamp = time.strftime("%Y%m%d%H%M%S")
+            out_video_dir = os.path.join(output_dir, "video_output_m3")
+            os.makedirs(out_video_dir, exist_ok=True)
+            out_video_path = os.path.join(out_video_dir, f"{filename}_hidden_{timestamp}.avi")
+
+            self.result_display.append("<font color='blue'>🎬 กำลังซ่อนข้อมูลในวิดีโอ...</font>")
+            self.worker = VideoSteganographyWorker(
+                video_file, out_video_path, part_video,
+                self.extract_frames, self.encode_message_to_last_frame, self.combine_frames_to_video,
+                self.hide_message_in_image, self.extract_message_from_image
+            )
+            self.worker.finished.connect(self.on_hide_finished_mode3)
+            self.worker.start()
+
+            # แสดงผลภาพและเสียงทันที (วิดีโอรอ thread เสร็จ)
+            self.result_display.append(f"<span style='color: #00ff88;'>✅ ซ่อนข้อมูลในภาพและเสียงสำเร็จ!</span>")
+            self.result_display.append(f"<span style='color: #00d4ff;'>🖼️ ภาพ: {out_img_name}</span>")
+            self.result_display.append(f"<span style='color: #00d4ff;'>🎵 เสียง: {os.path.basename(out_audio_path)}</span>")
+
+        except Exception as e:
+            self.result_display.append(f"<span style='color: #ff4444;'>❌ ข้อผิดพลาด: {str(e)}</span>")
+            raise
+
+
+
+
+
+
+
+
+
+
 
     def execute_mode4(self, item):
         """Mode 4: AES + RSA + Metadata"""

@@ -3,18 +3,36 @@ import datetime
 from PyQt5.QtWidgets import (
   QWidget, QVBoxLayout, QGroupBox, QHBoxLayout, QLineEdit,
   QTextEdit, QPushButton, QLabel, QMessageBox, QDialog, QFormLayout,
-  QComboBox, QTextBrowser, QDialogButtonBox, QFileDialog, QInputDialog,
+  QComboBox, QTextBrowser, QDialogButtonBox, QFileDialog, QInputDialog,QTabWidget,
   QScrollArea, QFrame
 )
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt, QUrl
 import gnupg
 
+
+import tempfile
+import subprocess
+import os
+
 class PGPTab(QWidget):
     def __init__(self):
         super().__init__()
         self.gpg_instance = gnupg.GPG()
         self.initUI()
+
+    def initialize_pgp(self):
+        try:
+            result = subprocess.run(['gpg', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if result.returncode != 0:
+                raise Exception("GPG is not available on this system.")
+
+            subprocess.run(['gpg', '--list-keys'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print("✅ GPG initialized successfully.")
+        except Exception as e:
+            print(f"❌ GPG initialization failed: {e}")
+            raise
+
 
     def initUI(self):
         self.setStyleSheet("""
@@ -312,14 +330,14 @@ class PGPTab(QWidget):
         row2_buttons_layout = QHBoxLayout()
         row2_buttons_layout.setSpacing(10)
         
-        self.rsa_sign_button = QPushButton("✍️ Sign Message/File")
+        self.rsa_sign_button = QPushButton("✍️ Sign Message")
         self.rsa_sign_button.setObjectName("signButton")
-        self.rsa_sign_button.clicked.connect(self.sign_message_or_file)
+        self.rsa_sign_button.clicked.connect(self.sign_message)
         self.rsa_sign_button.setMinimumHeight(40)
         
         self.rsa_verify_button = QPushButton("✅ Verify Signature")
         self.rsa_verify_button.setObjectName("verifyButton")
-        self.rsa_verify_button.clicked.connect(self.verify_signature)
+        self.rsa_verify_button.clicked.connect(self.verify_message_signature)
         self.rsa_verify_button.setMinimumHeight(40)
         
         self.rsa_sign_file_button = QPushButton("✍️ Sign File")
@@ -350,7 +368,8 @@ class PGPTab(QWidget):
         
         self.key_import_button = QPushButton("📥 Import Key")
         self.key_import_button.setObjectName("importKeyButton")
-        self.key_import_button.clicked.connect(self.import_key)
+        # self.key_import_button.clicked.connect(self.import_key)
+        self.key_import_button.clicked.connect(self.import_key_dialog)
         self.key_import_button.setMinimumHeight(40)
         
         self.key_export_button = QPushButton("📤 Export Key")
@@ -497,11 +516,7 @@ class PGPTab(QWidget):
         except Exception as e:
             self.rsa_result_output.append(f"<span style='color: #ff4444;'>❌ Error decrypting: {str(e)}</span>")
             QMessageBox.critical(self, "Error", f"Failed to decrypt: {str(e)}")
-
-
-
-       
-            
+     
             
     def select_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -512,233 +527,415 @@ class PGPTab(QWidget):
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                     content = f.read(200)
-                    self.rsa_message_input.setText(f"File: {os.path.basename(file_path)}\n{content[:150]}...")
+                    print(f"File: {os.path.basename(file_path)}\n{content[:150]}...")
             except Exception as e:
-                self.rsa_message_input.setText(f"File: {os.path.basename(file_path)} (Binary file)")
+                print(f"File: {os.path.basename(file_path)} (Binary file)")
     
     
     
-    def sign_message_or_file(self):
+            
+    def sign_message(self):
         message = self.rsa_message_input.text().strip()
         file_path = self.file_path_input.text().strip()
         private_key_text = self.rsa_private_key_input.toPlainText().strip()
-        
+
         if not message and not file_path:
-            QMessageBox.warning(self, "Input Error", "Please enter a message or select a file to sign.")
+            QMessageBox.warning(self, "Input Error", "กรุณาใส่ข้อความหรือเลือกไฟล์")
             return
         if not private_key_text:
-            QMessageBox.warning(self, "Input Error", "Please paste the Private Key for signing.")
+            QMessageBox.warning(self, "Input Error", "กรุณาใส่ Private Key")
             return
 
-        try:
-            imported = self.gpg_instance.import_keys(private_key_text)
-            if not imported.fingerprints:
-                raise Exception("Could not import Private Key. Please ensure it's a valid PGP private key.")
-            
-            signing_fingerprint = imported.fingerprints[0]
-            passphrase, ok = QInputDialog.getText(
-                self, 'Passphrase', 
-                'Please enter passphrase for signing key:', 
-                QLineEdit.Password
-            )
-            if not ok:
-                return
+        passphrase, ok = QInputDialog.getText(
+            self, 'Passphrase', 'ป้อนรหัสผ่านของกุญแจ:', QLineEdit.Password
+        )
+        if not ok or not passphrase:
+            return
 
-            if file_path:  # ลงลายเซ็นไฟล์
-                with open(file_path, 'rb') as f:
-                    signed_data = self.gpg_instance.sign_file(
-                        f, 
-                        passphrase=passphrase, 
-                        keyid=signing_fingerprint,  
-                        detach=True
-                    )
-                # ตรวจสอบผลลัพธ์ด้วย .status
-                if hasattr(signed_data, 'status') and signed_data.status == "signature created":
-                    signature_path = file_path + ".sig"
-                    with open(signature_path, 'wb') as sig_file:
-                        sig_file.write(signed_data.data)
-                    self.signature_input.setPlainText(str(signed_data))
+        # เขียน private key ลงไฟล์ชั่วคราว
+        temp_key_file = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".asc", delete=False) as tmp_key:
+                tmp_key.write(private_key_text.encode('utf-8'))
+                temp_key_file = tmp_key.name
+
+            with tempfile.TemporaryDirectory() as gnupg_home:
+                env = os.environ.copy()
+                env['GNUPGHOME'] = gnupg_home
+
+                # นำเข้า private key
+                import_result = subprocess.run([
+                    "gpg", "--batch", "--yes", "--import", temp_key_file
+                ], env=env, capture_output=True, text=True)
+
+                if import_result.returncode != 0:
+                    raise Exception(f"นำเข้า private key ไม่สำเร็จ: {import_result.stderr}")
+
+                # กรณี: ลงลายเซ็นไฟล์
+                if file_path:
+                    if not os.path.exists(file_path):
+                        raise Exception("ไม่พบไฟล์ที่ต้องการลงลายเซ็น")
+
+                    output_sig = os.path.join(gnupg_home, "signature.asc")
+                    result = subprocess.run([
+                        "gpg", "--batch", "--yes",
+                        "--pinentry-mode", "loopback",
+                        "--passphrase", passphrase,
+                        "--detach-sign", "--armor",
+                        "--output", output_sig,
+                        file_path
+                    ], env=env, capture_output=True, text=True)
+
+                    if result.returncode != 0:
+                        raise Exception(f"ลงลายเซ็นไฟล์ไม่สำเร็จ: {result.stderr}")
+
+                    with open(output_sig, "r", encoding="utf-8") as f:
+                        signature = f.read()
+
+                    # บันทึกลายเซ็นเป็นไฟล์ .sig
+                    sig_file_path = file_path + ".sig"
+                    with open(sig_file_path, "w", encoding="utf-8") as f:
+                        f.write(signature)
+
+                    self.signature_input.setPlainText(signature)
                     self.rsa_result_output.append(
-                        f"<span style='color: #00ff88;'>✅ File signed successfully! Signature saved to: {signature_path}</span>"
+                        f"<span style='color: #00ff88;'>✅ ลงลายเซ็นไฟล์สำเร็จ! บันทึกที่: {sig_file_path}</span>"
                     )
-                else:
-                    error_msg = signed_data.status if hasattr(signed_data, 'status') else "Unknown error"
-                    raise Exception(f"Signing failed: {error_msg}")
-            else:  # ลงลายเซ็นข้อความ
-                signed_data = self.gpg_instance.sign(
-                    message, 
-                    passphrase=passphrase, 
-                    keyid=signing_fingerprint, 
-                    detach=True
-                )
-                if hasattr(signed_data, 'status') and signed_data.status == "signature created":
-                    self.signature_input.setPlainText(str(signed_data))
+
+                # กรณี: ลงลายเซ็นข้อความ
+                elif message:
+                    temp_txt = os.path.join(gnupg_home, "message.txt")
+                    with open(temp_txt, "w", encoding="utf-8") as f:
+                        f.write(message)
+
+                    output_sig = os.path.join(gnupg_home, "signature.asc")
+                    result = subprocess.run([
+                        "gpg", "--batch", "--yes",
+                        "--pinentry-mode", "loopback",
+                        "--passphrase", passphrase,
+                        "--detach-sign", "--armor",
+                        "--output", output_sig,
+                        temp_txt
+                    ], env=env, capture_output=True, text=True)
+
+                    if result.returncode != 0:
+                        raise Exception(f"ลงลายเซ็นข้อความไม่สำเร็จ: {result.stderr}")
+
+                    with open(output_sig, "r", encoding="utf-8") as f:
+                        signature = f.read()
+
+                    self.signature_input.setPlainText(signature)
                     self.rsa_result_output.append(
-                        "<span style='color: #00ff88;'>✅ Message signed successfully!</span>"
+                        "<span style='color: #00ff88;'>✅ ลงลายเซ็นข้อความสำเร็จ!</span>"
                     )
+
                 else:
-                    error_msg = signed_data.status if hasattr(signed_data, 'status') else "Unknown error"
-                    raise Exception(f"Signing failed: {error_msg}")
-                    
+                    raise Exception("ต้องระบุข้อความหรือไฟล์เพื่อลงลายเซ็น")
+
         except Exception as e:
-            self.rsa_result_output.append(
-                f"<span style='color: #ff4444;'>❌ Error signing: {str(e)}</span>"
-            )
-            QMessageBox.critical(self, "Error", f"Failed to sign: {str(e)}") 
-    
-    
+            error_msg = str(e)
+            self.rsa_result_output.append(f"<span style='color: #ff4444;'>❌ ข้อผิดพลาด: {error_msg}</span>")
+            QMessageBox.critical(self, "Error", f"เกิดข้อผิดพลาด:\n{error_msg}")
+
+        finally:
+            # ลบไฟล์ชั่วคราวของ private key
+            if temp_key_file and os.path.exists(temp_key_file):
+                try:
+                    os.unlink(temp_key_file)
+                except:
+                    pass  # ถ้าลบไม่ได้ก็ช่างมัน
+             
     def sign_file(self):
+
+        # ดึงข้อมูลจาก GUI
         file_path = self.file_path_input.text().strip()
         private_key_text = self.rsa_private_key_input.toPlainText().strip()
-        
+
+        # ตรวจสอบข้อมูล
         if not file_path:
-            QMessageBox.warning(self, "Input Error", "Please select a file to sign.")
+            QMessageBox.warning(self, "Input Error", "กรุณาเลือกไฟล์ที่ต้องการลงลายเซ็น")
+            return
+        if not os.path.exists(file_path):
+            QMessageBox.critical(self, "File Error", "ไม่พบไฟล์ที่ระบุ")
             return
         if not private_key_text:
-            QMessageBox.warning(self, "Input Error", "Please paste the Private Key for signing.")
+            QMessageBox.warning(self, "Input Error", "กรุณาใส่ Private Key")
             return
 
+        # ขอรหัสผ่านจากผู้ใช้
+        passphrase, ok = QInputDialog.getText(
+            self, 'Passphrase', 'ป้อนรหัสผ่านของกุญแจ:', QLineEdit.Password
+        )
+        if not ok or not passphrase:
+            return  # ยกเลิกถ้าไม่ใส่หรือกด Cancel
+
+        # สร้างไฟล์ชั่วคราวสำหรับ private key
+        temp_key_file = None
         try:
-            imported = self.gpg_instance.import_keys(private_key_text)
-            if not imported.fingerprints:
-                raise Exception("Could not import Private Key. Please ensure it's a valid PGP private key.")
-            
-            signing_fingerprint = imported.fingerprints[0]
-            passphrase, ok = QInputDialog.getText(
-                self, 'Passphrase', 
-                'Please enter passphrase for signing key:', 
-                QLineEdit.Password
-            )
-            if not ok:
+            with tempfile.NamedTemporaryFile(suffix=".asc", delete=False) as tmp_key:
+                tmp_key.write(private_key_text.encode('utf-8'))
+                temp_key_file = tmp_key.name
+
+            # ใช้ subprocess เรียก gpg โดยตรง
+            with tempfile.TemporaryDirectory() as gnupg_home:
+                env = os.environ.copy()
+                env['GNUPGHOME'] = gnupg_home
+
+                # นำเข้า private key
+                import_result = subprocess.run([
+                    "gpg", "--batch", "--yes", "--import", temp_key_file
+                ], env=env, capture_output=True, text=True)
+
+                if import_result.returncode != 0:
+                    raise Exception(f"นำเข้า private key ไม่สำเร็จ: {import_result.stderr}")
+
+                # ลงลายเซ็นไฟล์แบบ detach (ASCII)
+                output_sig = os.path.join(gnupg_home, "signature.asc")
+                result = subprocess.run([
+                    "gpg", "--batch", "--yes",
+                    "--pinentry-mode", "loopback",
+                    "--passphrase", passphrase,
+                    "--detach-sign", "--armor",
+                    "--output", output_sig,
+                    file_path
+                ], env=env, capture_output=True, text=True)
+
+                if result.returncode != 0:
+                    raise Exception(f"ลงลายเซ็นไฟล์ไม่สำเร็จ: {result.stderr}")
+
+                # อ่านลายเซ็น
+                with open(output_sig, "r", encoding="utf-8") as f:
+                    signature = f.read()
+
+                # บันทึกลายเซ็นเป็นไฟล์ .sig
+                sig_file_path = file_path + ".sig"
+                with open(sig_file_path, "w", encoding="utf-8") as f:
+                    f.write(signature)
+
+                # แสดงผลใน GUI
+                self.signature_input.setPlainText(signature)
+                self.rsa_result_output.append(
+                    f"<span style='color: #00ff88;'>✅ ลงลายเซ็นไฟล์สำเร็จ! บันทึกที่: {sig_file_path}</span>"
+                )
+
+        except Exception as e:
+            error_msg = str(e)
+            self.rsa_result_output.append(f"<span style='color: #ff4444;'>❌ ข้อผิดพลาด: {error_msg}</span>")
+            QMessageBox.critical(self, "Error", f"เกิดข้อผิดพลาด:\n{error_msg}")
+
+        finally:
+            # ลบไฟล์ชั่วคราวของ private key
+            if temp_key_file and os.path.exists(temp_key_file):
+                try:
+                    os.unlink(temp_key_file)
+                except:
+                    pass  # ถ้าลบไม่ได้ก็ช่างมัน
+                             
+    def verify_message_signature(self):
+        """
+        GUI Version: ตรวจสอบลายเซ็นข้อความหรือไฟล์
+        ใช้ subprocess + gpg โดยตรง
+        """
+        message = self.rsa_message_input.text().strip()
+        file_path = self.file_path_input.text().strip()
+        signature_text = self.signature_input.toPlainText().strip()
+        public_key_text = self.rsa_public_key_input.toPlainText().strip()
+
+        if not message and not file_path:
+            QMessageBox.warning(self, "Input Error", "กรุณาใส่ข้อความหรือเลือกไฟล์ต้นฉบับ")
+            return
+        if not signature_text:
+            QMessageBox.warning(self, "Input Error", "กรุณาใส่ลายเซ็นดิจิทัล")
+            return
+
+        # สร้างไฟล์ชั่วคราวสำหรับ public key (ถ้ามี)
+        temp_pub_key = None
+        if public_key_text:
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".asc", delete=False) as tmp:
+                    tmp.write(public_key_text.encode('utf-8'))
+                    temp_pub_key = tmp.name
+            except Exception as e:
+                QMessageBox.warning(self, "Key Error", f"ไม่สามารถสร้างไฟล์กุญแจได้: {str(e)}")
                 return
 
-            with open(file_path, 'rb') as f:
-                signed_data = self.gpg_instance.sign_file(
-                    f, 
-                    passphrase=passphrase, 
-                    keyid=signing_fingerprint, 
-                    detach=True
-                )
-
-            # ตรวจสอบผลลัพธ์ด้วย .status
-            if hasattr(signed_data, 'status') and signed_data.status == "signature created":
-                signature_path = file_path + ".sig"
-                with open(signature_path, 'wb') as sig_file:
-                    sig_file.write(signed_data.data)
-                self.signature_input.setPlainText(str(signed_data))
-                self.rsa_result_output.append(
-                    f"<span style='color: #00ff88;'>✅ File signed successfully! Signature saved to: {signature_path}</span>"
-                )
-            else:
-                error_msg = signed_data.status if hasattr(signed_data, 'status') else "Unknown error"
-                raise Exception(f"Signing failed: {error_msg}")
-                
-        except Exception as e:
-            self.rsa_result_output.append(
-                f"<span style='color: #ff4444;'>❌ Error signing file: {str(e)}</span>"
-            )
-            QMessageBox.critical(self, "Error", f"Failed to sign file: {str(e)}")    
-
-    
-    def verify_signature(self):
-        message = self.rsa_message_input.text().strip()
-        signature = self.signature_input.toPlainText().strip()
-        public_key_text = self.rsa_public_key_input.toPlainText().strip()
-        file_path = self.file_path_input.text().strip()
-        
-        if not message and not file_path:
-            QMessageBox.warning(self, "Input Error", "Please enter the message or select a file.")
-            return
-        if not signature:
-            QMessageBox.warning(self, "Input Error", "Please paste the digital signature.")
-            return
-
         try:
-            if public_key_text:
-                imported = self.gpg_instance.import_keys(public_key_text)
-                if not imported.fingerprints:
-                    QMessageBox.warning(self, "Key Import Error", "Could not import Public Key. Verification might fail.")
+            with tempfile.TemporaryDirectory() as gnupg_home:
+                env = os.environ.copy()
+                env['GNUPGHOME'] = gnupg_home
 
-            if file_path:  # ตรวจสอบลายเซ็นไฟล์
-                with open(file_path, 'rb') as f:
-                    file_data = f.read()
-                verified = self.gpg_instance.verify_file(
-                    signature.encode('utf-8'), 
-                    file_data
-                )
-            else:  # ตรวจสอบลายเซ็นข้อความ
-                verified = self.gpg_instance.verify_data(
-                    signature, 
-                    message.encode('utf-8')
-                )
+                # นำเข้า public key ถ้ามี
+                if temp_pub_key:
+                    result = subprocess.run([
+                        "gpg", "--batch", "--yes", "--import", temp_pub_key
+                    ], env=env, capture_output=True, text=True)
+                    if result.returncode != 0:
+                        self.rsa_result_output.append(
+                            f"<span style='color: #ffcc00;'>⚠️ ไม่สามารถนำเข้า public key: {result.stderr.strip()}</span>"
+                        )
 
-            if verified and verified.valid:
-                self.rsa_result_output.append(
-                    "<span style='color: #00ff88;'>✅ Signature is VALID!</span>"
-                )
-                self.rsa_result_output.append(
-                    f"  Signed by: <span style='color:#00d4ff;'>{verified.username}</span>"
-                )
-                self.rsa_result_output.append(
-                    f"  Key ID: <span style='color:#00d4ff;'>{verified.key_id}</span>"
-                )
-            else:
-                self.rsa_result_output.append(
-                    "<span style='color: #ff4444;'>❌ Signature is INVALID or could not be verified.</span>"
-                )
-                if verified and verified.status:
-                    self.rsa_result_output.append(f"  Status: {verified.status}")
-                    
+                # บันทึกลายเซ็นลงไฟล์ชั่วคราว
+                sig_path = os.path.join(gnupg_home, "signature.asc")
+                with open(sig_path, "w", encoding="utf-8") as f:
+                    f.write(signature_text)
+
+                # กรณี: ตรวจสอบลายเซ็นไฟล์
+                if file_path:
+                    if not os.path.exists(file_path):
+                        raise Exception("ไม่พบไฟล์ต้นฉบับ")
+                    verify_cmd = ["gpg", "--verify", sig_path, file_path]
+
+                # กรณี: ตรวจสอบลายเซ็นข้อความ
+                elif message:
+                    msg_path = os.path.join(gnupg_home, "message.txt")
+                    with open(msg_path, "w", encoding="utf-8") as f:
+                        f.write(message)
+                    verify_cmd = ["gpg", "--verify", sig_path, msg_path]
+
+                else:
+                    raise Exception("ต้องระบุข้อความหรือไฟล์ต้นฉบับ")
+
+                # รันคำสั่งตรวจสอบ
+                result = subprocess.run(verify_cmd, env=env, capture_output=True, text=True)
+                output = result.stdout + "\n" + result.stderr
+
+                if result.returncode == 0:
+                    # ดึงข้อมูลผู้ลงนาม
+                    username = "Unknown"
+                    key_id = "Unknown"
+                    for line in output.splitlines():
+                        if "Good signature" in line:
+                            if "from" in line:
+                                username = line.split("from")[-1].strip()
+                            if "key" in line:
+                                key_id = line.split("key")[-1].strip()
+                            break
+
+                    self.rsa_result_output.append("<span style='color: #00ff88;'>✅ ลายเซ็นถูกต้อง (Verified)</span>")
+                    self.rsa_result_output.append(f"  ผู้ลงนาม: <span style='color:#00d4ff;'>{username}</span>")
+                    self.rsa_result_output.append(f"  รหัสกุญแจ: <span style='color:#00d4ff;'>{key_id}</span>")
+                else:
+                    self.rsa_result_output.append("<span style='color: #ff4444;'>❌ ลายเซ็นไม่ถูกต้อง หรือ ไม่สามารถตรวจสอบได้</span>")
+                    if "no valid OpenPGP data found" in result.stderr:
+                        self.rsa_result_output.append("  <span style='color: #ffcc00;'>ข้อผิดพลาด: ลายเซ็นไม่ใช่รูปแบบ PGP ที่ถูกต้อง</span>")
+                    elif "bad signature" in result.stderr:
+                        self.rsa_result_output.append("  <span style='color: #ffcc00;'>ข้อผิดพลาด: ลายเซ็นไม่ตรงกับข้อมูล</span>")
+                    else:
+                        self.rsa_result_output.append(f"  <span style='color: #ffcc00;'>ข้อผิดพลาด: {result.stderr.strip()}</span>")
+
         except Exception as e:
-            self.rsa_result_output.append(
-                f"<span style='color: #ff4444;'>❌ Error verifying signature: {str(e)}</span>"
-            )
-            QMessageBox.critical(self, "Error", f"Failed to verify signature: {str(e)}")
-    
+            self.rsa_result_output.append(f"<span style='color: #ff4444;'>❌ เกิดข้อผิดพลาด: {str(e)}</span>")
+            QMessageBox.critical(self, "Error", str(e))
+        finally:
+            # ลบไฟล์ชั่วคราวของ public key
+            if temp_pub_key and os.path.exists(temp_pub_key):
+                try:
+                    os.unlink(temp_pub_key)
+                except:
+                    pass
+                   
     def verify_file_signature(self):
+        """
+        GUI Version: ตรวจสอบลายเซ็นไฟล์โดยใช้ไฟล์ลายเซ็น (.sig หรือ .asc)
+        """
         file_path = self.file_path_input.text().strip()
-        signature_path = self.signature_input.toPlainText().strip()
+        signature_path_text = self.signature_input.toPlainText().strip()  # ผู้ใช้ใส่ path ของ .sig
         public_key_text = self.rsa_public_key_input.toPlainText().strip()
-        
-        if not file_path or not signature_path:
-            QMessageBox.warning(self, "Input Error", "Please select a file and provide a signature file.")
+
+        if not file_path:
+            QMessageBox.warning(self, "Input Error", "กรุณาเลือกไฟล์ต้นฉบับ")
+            return
+        if not os.path.exists(file_path):
+            QMessageBox.critical(self, "File Error", "ไม่พบไฟล์ต้นฉบับ")
+            return
+        if not signature_path_text:
+            QMessageBox.warning(self, "Input Error", "กรุณาใส่เส้นทางไฟล์ลายเซ็น หรือวางลายเซ็น")
             return
 
+        # ตรวจสอบว่า signature_path_text เป็น path ไปยังไฟล์ หรือเป็นข้อความลายเซ็น
+        if os.path.exists(signature_path_text):
+            # ถ้าเป็น path จริง → อ่านไฟล์
+            try:
+                with open(signature_path_text, "r", encoding="utf-8") as f:
+                    signature = f.read()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"อ่านไฟล์ลายเซ็นไม่ได้: {str(e)}")
+                return
+        else:
+            # ถ้าไม่ใช่ไฟล์ → ถือว่าเป็นข้อความลายเซ็น
+            signature = signature_path_text
+
+        # สร้างไฟล์ชั่วคราวสำหรับ public key
+        temp_pub_key = None
+        if public_key_text:
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".asc", delete=False) as tmp:
+                    tmp.write(public_key_text.encode('utf-8'))
+                    temp_pub_key = tmp.name
+            except Exception as e:
+                QMessageBox.warning(self, "Key Error", f"ไม่สามารถสร้างไฟล์กุญแจได้: {str(e)}")
+                return
+
         try:
-            if public_key_text:
-                imported = self.gpg_instance.import_keys(public_key_text)
-                if not imported.fingerprints:
-                    QMessageBox.warning(self, "Key Import Error", "Could not import Public Key. Verification might fail.")
+            with tempfile.TemporaryDirectory() as gnupg_home:
+                env = os.environ.copy()
+                env['GNUPGHOME'] = gnupg_home
 
-            with open(file_path, 'rb') as f:
-                file_data = f.read()
-            with open(signature_path, 'rb') as s:
-                signature_data = s.read()
+                # นำเข้า public key ถ้ามี
+                if temp_pub_key:
+                    subprocess.run([
+                        "gpg", "--batch", "--yes", "--import", temp_pub_key
+                    ], env=env, capture_output=True, check=True)
 
-            verified = self.gpg_instance.verify_file(signature_data, file_data)
+                # บันทึกลายเซ็นลงไฟล์ชั่วคราว
+                sig_path = os.path.join(gnupg_home, "signature.asc")
+                with open(sig_path, "w", encoding="utf-8") as f:
+                    f.write(signature)
 
-            if verified and verified.valid:
-                self.rsa_result_output.append(
-                    "<span style='color: #00ff88;'>✅ Signature is VALID!</span>"
-                )
-                self.rsa_result_output.append(
-                    f"  Signed by: <span style='color:#00d4ff;'>{verified.username}</span>"
-                )
-                self.rsa_result_output.append(
-                    f"  Key ID: <span style='color:#00d4ff;'>{verified.key_id}</span>"
-                )
-            else:
-                self.rsa_result_output.append(
-                    "<span style='color: #ff4444;'>❌ Signature is INVALID or could not be verified.</span>"
-                )
-                
+                # ตรวจสอบลายเซ็น
+                verify_cmd = ["gpg", "--verify", sig_path, file_path]
+                result = subprocess.run(verify_cmd, env=env, capture_output=True, text=True)
+                output = result.stdout + "\n" + result.stderr
+
+                if result.returncode == 0:
+                    # ดึงข้อมูลผู้ลงนาม
+                    username = "Unknown"
+                    key_id = "Unknown"
+                    for line in output.splitlines():
+                        if "Good signature" in line:
+                            if "from" in line:
+                                username = line.split("from")[-1].strip()
+                            if "key" in line:
+                                key_id = line.split("key")[-1].strip()
+                            break
+
+                    self.rsa_result_output.append("<span style='color: #00ff88;'>✅ ลายเซ็นถูกต้อง (Verified)</span>")
+                    self.rsa_result_output.append(f"  ผู้ลงนาม: <span style='color:#00d4ff;'>{username}</span>")
+                    self.rsa_result_output.append(f"  รหัสกุญแจ: <span style='color:#00d4ff;'>{key_id}</span>")
+                else:
+                    self.rsa_result_output.append("<span style='color: #ff4444;'>❌ ลายเซ็นไม่ถูกต้อง หรือ ไม่สามารถตรวจสอบได้</span>")
+                    if "bad signature" in result.stderr:
+                        self.rsa_result_output.append("  <span style='color: #ffcc00;'>เหตุผล: ลายเซ็นไม่ตรงกับไฟล์</span>")
+                    else:
+                        self.rsa_result_output.append(f"  <span style='color: #ffcc00;'>ข้อผิดพลาด: {result.stderr.strip()}</span>")
+
+        except subprocess.CalledProcessError as e:
+            self.rsa_result_output.append(f"<span style='color: #ff4444;'>❌ เรียก gpg ไม่สำเร็จ: {e.stderr.strip()}</span>")
         except Exception as e:
-            self.rsa_result_output.append(
-                f"<span style='color: #ff4444;'>❌ Error verifying file signature: {str(e)}</span>"
-            )
-            QMessageBox.critical(self, "Error", f"Failed to verify file signature: {str(e)}")            
+            self.rsa_result_output.append(f"<span style='color: #ff4444;'>❌ เกิดข้อผิดพลาด: {str(e)}</span>")
+            QMessageBox.critical(self, "Error", str(e))
+        finally:
+            # ลบไฟล์ชั่วคราวของ public key
+            if temp_pub_key and os.path.exists(temp_pub_key):
+                try:
+                    os.unlink(temp_pub_key)
+                except:
+                    pass     
             
             
+            
+            
+                     
             
 
     def list_all_keys(self):
@@ -872,22 +1069,192 @@ class PGPTab(QWidget):
         update_text_browser()
         dialog.exec_()
     
+    
+    def import_key_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("📥 Import Key")
+        dialog.setStyleSheet(self.styleSheet())
+        layout = QVBoxLayout(dialog)
+        
+        # Tab สำหรับเลือก Key ที่มีอยู่ใน GPG
+        tab_widget = QTabWidget()
+        layout.addWidget(tab_widget)
+
+        # Tab 1: เลือก Key จาก GPG
+        gpg_tab = QWidget()
+        gpg_layout = QVBoxLayout(gpg_tab)
+        
+        key_list_combo = QComboBox()
+        keys = self.gpg_instance.list_keys()
+        if keys:
+            for key in keys:
+                uid = key['uids'][0] if key['uids'] else "No User ID"
+                key_list_combo.addItem(f"{uid} - {key['fingerprint']}")
+        else:
+            key_list_combo.addItem("No keys found")
+        gpg_layout.addWidget(QLabel("Select key from GPG:"))
+        gpg_layout.addWidget(key_list_combo)
+        
+        load_key_button = QPushButton("🔍 Load Selected Key")
+        load_key_button.setObjectName("listKeysButton")
+        load_key_button.clicked.connect(lambda: self.load_gpg_key(key_list_combo.currentText()))
+        gpg_layout.addWidget(load_key_button)
+        
+        tab_widget.addTab(gpg_tab, "From GPG")
+        
+        # Tab 2: นำเข้าจากไฟล์
+        file_tab = QWidget()
+        file_layout = QVBoxLayout(file_tab)
+        
+        public_key_path = QLineEdit()
+        public_key_path.setPlaceholderText("Select Public Key (.asc)")
+        private_key_path = QLineEdit()
+        private_key_path.setPlaceholderText("Select Private Key (.asc)")
+        
+        def select_file(line_edit):
+            path, _ = QFileDialog.getOpenFileName(dialog, "Select Key File", "", "Key Files (*.asc *.gpg)")
+            if path:
+                line_edit.setText(path)
+        
+        public_key_btn = QPushButton("📂 Public Key")
+        public_key_btn.clicked.connect(lambda: select_file(public_key_path))
+        private_key_btn = QPushButton("📂 Private Key")
+        private_key_btn.clicked.connect(lambda: select_file(private_key_path))
+        
+        file_layout.addWidget(QLabel("Public Key:"))
+        file_layout.addWidget(public_key_path)
+        file_layout.addWidget(public_key_btn)
+        file_layout.addWidget(QLabel("Private Key:"))
+        file_layout.addWidget(private_key_path)
+        file_layout.addWidget(private_key_btn)
+        
+        import_button = QPushButton("📥 Import Keys")
+        import_button.setObjectName("importKeyButton")
+        import_button.clicked.connect(lambda: self.import_keys_from_files(public_key_path.text(), private_key_path.text()))
+        file_layout.addWidget(import_button)
+        
+        tab_widget.addTab(file_tab, "From Files")
+        
+        # ปุ่มปิด
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+        
+        dialog.exec_() 
+    
+    
+    
+    def load_gpg_key(self, key_info):
+        if not key_info or " - " not in key_info:
+            QMessageBox.warning(self, "Error", "Invalid key selected")
+            return
+        
+        fingerprint = key_info.split(" - ")[-1].strip()
+
+        try:
+            # ดึง Public Key
+            public_key = self.gpg_instance.export_keys(fingerprint)
+            if not public_key:
+                raise Exception("Public key not found")
+
+            # ดึง Private Key (ถ้ามี)
+            passphrase, ok = QInputDialog.getText(
+                self, 'Passphrase', 'Enter passphrase for private key:', QLineEdit.Password)
+            if not ok:
+                return
+
+            private_key = self.gpg_instance.export_keys(fingerprint, secret=True, passphrase=passphrase)
+            if not private_key:
+                raise Exception("Private key not found or wrong passphrase")
+
+            # แสดงผลใน UI เฉพาะถ้าได้ทั้งคู่
+            self.rsa_public_key_input.setPlainText(public_key)
+            self.rsa_private_key_input.setPlainText(private_key)
+            self.rsa_result_output.append(
+                "<span style='color: #00ff88;'>✅ Loaded public and private keys from GPG</span>"
+            )
+
+        except Exception as e:
+            # ล้างช่องแสดงผล
+            self.rsa_public_key_input.clear()
+            self.rsa_private_key_input.clear()
+            self.rsa_result_output.append(
+                "<span style='color: #ff4444;'>❌ Failed to load keys: {}</span>".format(str(e))
+            )
+            QMessageBox.critical(self, "Error", f"Failed to load keys: {str(e)}")
+
+        
+        
+    
+    def import_keys_from_files(self, public_path, private_path):
+        if not public_path and not private_path:
+            QMessageBox.warning(self, "Error", "Please select at least one file")
+            return
+        
+        try:
+            # นำเข้า Public Key
+            if public_path:
+                with open(public_path, "r") as f:
+                    pub_data = f.read()
+                pub_results = self.gpg_instance.import_keys(pub_data)
+                if pub_results.count > 0:
+                    self.rsa_result_output.append(f"<span style='color: #00ff88;'>✅ Imported public key: {pub_results.count} key(s)</span>")
+                    self.rsa_public_key_input.setPlainText(pub_data)
+                else:
+                    raise Exception("Failed to import public key")
+            
+            # นำเข้า Private Key
+            if private_path:
+                with open(private_path, "r") as f:
+                    priv_data = f.read()
+                priv_results = self.gpg_instance.import_keys(priv_data)
+                if priv_results.count > 0:
+                    self.rsa_result_output.append(f"<span style='color: #00ff88;'>✅ Imported private key: {priv_results.count} key(s)</span>")
+                    self.rsa_private_key_input.setPlainText(priv_data)
+                else:
+                    raise Exception("Failed to import private key")
+            
+            QMessageBox.information(self, "Success", "Keys imported successfully")
+        except Exception as e:
+            self.rsa_result_output.append(f"<span style='color: #ff4444;'>❌ Error importing keys: {str(e)}</span>")
+            QMessageBox.critical(self, "Error", f"Failed to import keys: {str(e)}")
+
+    
+
     def import_key(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select Key File to Import", "", "Key Files (*.asc *.gpg);;All Files (*.*)")
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 
+            "Select Key File to Import", 
+            "", 
+            "Key Files (*.asc *.gpg);;All Files (*.*)"
+        )
         if file_path:
             try:
                 with open(file_path, "r") as f:
                     key_data = f.read()
-                result = self.gpg_instance.import_keys(key_data)
-                if result.ok:
-                    self.rsa_result_output.append(f"<span style='color: #00ff88;'>✅ Imported {result.count} key(s).</span>")
-                    for fp in result.fingerprints:
-                        self.rsa_result_output.append(f"  - Fingerprint: <span style='color:#00d4ff;'>{fp}</span>")
+                results = self.gpg_instance.import_keys(key_data)  # รับผลลัพธ์เป็น list
+                if len(results) > 0:
+                    # ตรวจสอบผลลัพธ์แต่ละตัว
+                    success_count = 0
+                    fingerprints = []
+                    for res in results:
+                        if res['status'] == 'ok':  # ใช้ status แทน ok
+                            success_count += 1
+                            fingerprints.extend(res.fingerprints)
+                    if success_count > 0:
+                        self.rsa_result_output.append(f"<span style='color: #00ff88;'>✅ Imported {success_count} key(s).</span>")
+                        for fp in fingerprints:
+                            self.rsa_result_output.append(f"  - Fingerprint: <span style='color:#00d4ff;'>{fp}</span>")
+                    else:
+                        raise Exception("No keys imported successfully")
                 else:
-                    raise Exception(result.status)
+                    raise Exception("No keys imported")
             except Exception as e:
                 self.rsa_result_output.append(f"<span style='color: #ff4444;'>❌ Error importing key: {str(e)}</span>")
                 QMessageBox.critical(self, "Error", f"Failed to import key: {str(e)}")
+    
+    
+    
     
     def export_key(self):
         dialog = QDialog(self)
@@ -941,225 +1308,8 @@ class PGPTab(QWidget):
             QMessageBox.critical(dialog, "Error", f"Failed to export key: {str(e)}")            
             
             
-            
-    def sign_message(self):
-        """ลงลายเซ็นข้อความ"""
-        message = self.rsa_message_input.text().strip()
-        private_key_text = self.rsa_private_key_input.toPlainText().strip()
-        
-        if not message:
-            QMessageBox.warning(self, "Input Error", "Please enter a message to sign.")
-            return
-        if not private_key_text:
-            QMessageBox.warning(self, "Input Error", "Please paste the Private Key for signing.")
-            return
-
-        try:
-            # นำเข้า Private Key
-            imported = self.gpg_instance.import_keys(private_key_text)
-            if not imported.fingerprints:
-                raise Exception("Could not import Private Key. Please ensure it's a valid PGP private key.")
-            
-            signing_fingerprint = imported.fingerprints[0]
-            # รับ Passphrase
-            passphrase, ok = QInputDialog.getText(
-                self, 'Passphrase', 
-                'Please enter passphrase for signing key:', 
-                QLineEdit.Password
-            )
-            if not ok:
-                return
-
-            # ลงลายเซ็นข้อความ
-            signed_data = self.gpg_instance.sign(
-                message,  # ไม่ต้อง encode
-                passphrase=passphrase, 
-                keyid=signing_fingerprint, 
-                detach=True
-            )
-            
-            # ตรวจสอบผลลัพธ์
-            if hasattr(signed_data, 'status') and signed_data.status == "signature created":
-                self.signature_input.setPlainText(str(signed_data))
-                self.rsa_result_output.append(
-                    "<span style='color: #00ff88;'>✅ Message signed successfully!</span>"
-                )
-            else:
-                error_msg = signed_data.status if hasattr(signed_data, 'status') else "Unknown error"
-                raise Exception(f"Signing failed: {error_msg}")
-                
-        except Exception as e:
-            self.rsa_result_output.append(
-                f"<span style='color: #ff4444;'>❌ Error signing message: {str(e)}</span>"
-            )
-            QMessageBox.critical(self, "Error", f"Failed to sign message: {str(e)}")
-            
-            
-
-    
-    
-    def sign_file(self):
-        """ลงลายเซ็นไฟล์"""
-        file_path = self.file_path_input.text().strip()
-        private_key_text = self.rsa_private_key_input.toPlainText().strip()
-        
-        if not file_path:
-            QMessageBox.warning(self, "Input Error", "Please select a file to sign.")
-            return
-        if not private_key_text:
-            QMessageBox.warning(self, "Input Error", "Please paste the Private Key for signing.")
-            return
-
-        try:
-            # นำเข้า Private Key
-            imported = self.gpg_instance.import_keys(private_key_text)
-            if not imported.fingerprints:
-                raise Exception("Could not import Private Key. Please ensure it's a valid PGP private key.")
-            
-            signing_fingerprint = imported.fingerprints[0]
-            # รับ Passphrase
-            passphrase, ok = QInputDialog.getText(
-                self, 'Passphrase', 
-                'Please enter passphrase for signing key:', 
-                QLineEdit.Password
-            )
-            if not ok:
-                return
-
-            # ลงลายเซ็นไฟล์
-            with open(file_path, 'rb') as f:
-                signed_data = self.gpg_instance.sign_file(
-                    f, 
-                    passphrase=passphrase, 
-                    keyid=signing_fingerprint, 
-                    detach=True
-                )
-            
-            # ตรวจสอบผลลัพธ์
-            if hasattr(signed_data, 'status') and signed_data.status == "signature created":
-                signature_path = file_path + ".sig"
-                with open(signature_path, 'wb') as sig_file:
-                    sig_file.write(signed_data.data)
-                self.signature_input.setPlainText(str(signed_data))
-                self.rsa_result_output.append(
-                    f"<span style='color: #00ff88;'>✅ File signed successfully! Signature saved to: {signature_path}</span>"
-                )
-            else:
-                error_msg = signed_data.status if hasattr(signed_data, 'status') else "Unknown error"
-                raise Exception(f"Signing failed: {error_msg}")
-                
-        except Exception as e:
-            self.rsa_result_output.append(
-                f"<span style='color: #ff4444;'>❌ Error signing file: {str(e)}</span>"
-            )
-            QMessageBox.critical(self, "Error", f"Failed to sign file: {str(e)}")
-    
-
-
-    def verify_message_signature(self):
-        """ตรวจสอบลายเซ็นข้อความ"""
-        message = self.rsa_message_input.text().strip()
-        signature = self.signature_input.toPlainText().strip()
-        public_key_text = self.rsa_public_key_input.toPlainText().strip()
-
-        if not message or not signature:
-            QMessageBox.warning(self, "Input Error", "Please enter the message and signature.")
-            return
-
-        try:
-            # นำเข้า Public Key หากมี
-            if public_key_text:
-                self.gpg_instance.import_keys(public_key_text)
-
-            # ตรวจสอบว่า message เป็นข้อความอ่านได้
-            try:
-                message_bytes = message.encode('utf-8')
-            except UnicodeEncodeError:
-                message_bytes = message.encode('latin-1')  # ถ้าไม่ใช่ UTF-8
-
-            # ลายเซ็นเป็น ASCII-armored ไม่ควรใช้ encode
-            signature_bytes = signature.encode('utf-8')  # ใช้ได้ในกรณีนี้ แต่ควรระวัง
-
-            # ตรวจสอบลายเซ็น
-            verified = self.gpg_instance.verify_data(signature_bytes, message_bytes)
-
-            # ตรวจสอบ .valid แทนแค่ .status
-            if verified and getattr(verified, 'valid', False):
-                self.rsa_result_output.append(
-                    "<span style='color: #00ff88;'>✅ Signature is VALID!</span>"
-                )
-                if hasattr(verified, 'username'):
-                    self.rsa_result_output.append(
-                        f"Signed by: <span style='color:#00d4ff;'>{verified.username}</span>"
-                    )
-                if hasattr(verified, 'key_id'):
-                    self.rsa_result_output.append(
-                        f"Key ID: <span style='color:#00d4ff;'>{verified.key_id}</span>"
-                    )
-            else:
-                self.rsa_result_output.append(
-                    "<span style='color: #ff4444;'>❌ Signature is INVALID or could not be verified.</span>"
-                )
-                if hasattr(verified, 'status'):
-                    self.rsa_result_output.append(f"Status: {verified.status}")
-
-        except Exception as e:
-            self.rsa_result_output.append(
-                f"<span style='color: #ff4444;'>❌ Error verifying signature: {str(e)}</span>"
-            )
-            QMessageBox.critical(self, "Error", f"Failed to verify signature: {str(e)}")
-    
-    
-    def verify_file_signature(self):
-        """ตรวจสอบลายเซ็นไฟล์"""
-        file_path = self.file_path_input.text().strip()
-        signature_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Signature File", "", "Signature Files (*.sig);;All Files (*.*)"
-        )
-
-        if not file_path or not signature_path:
-            QMessageBox.warning(self, "Input Error", "Please select a file and signature file.")
-            return
-
-        try:
-            # อ่านไฟล์และลายเซ็นแบบ binary
-            with open(file_path, 'rb') as f:
-                file_data = f.read()
-            with open(signature_path, 'rb') as s:
-                signature_data = s.read()
-
-            # ตรวจสอบลายเซ็น
-            verified = self.gpg_instance.verify_file(signature_data, file_data)
-
-            # ตรวจสอบ .valid แทนแค่ .status
-            if verified and getattr(verified, 'valid', False):
-                self.rsa_result_output.append(
-                    "<span style='color: #00ff88;'>✅ Signature is VALID!</span>"
-                )
-                if hasattr(verified, 'username'):
-                    self.rsa_result_output.append(
-                        f"Signed by: <span style='color:#00d4ff;'>{verified.username}</span>"
-                    )
-                if hasattr(verified, 'key_id'):
-                    self.rsa_result_output.append(
-                        f"Key ID: <span style='color:#00d4ff;'>{verified.key_id}</span>"
-                    )
-            else:
-                self.rsa_result_output.append(
-                    "<span style='color: #ff4444;'>❌ Signature is INVALID or could not be verified.</span>"
-                )
-                if hasattr(verified, 'status'):
-                    self.rsa_result_output.append(f"Status: {verified.status}")
-
-        except Exception as e:
-            self.rsa_result_output.append(
-                f"<span style='color: #ff4444;'>❌ Error verifying file signature: {str(e)}</span>"
-            )
-            QMessageBox.critical(self, "Error", f"Failed to verify file signature: {str(e)}")
-    
  
- 
- 
+
  
  
  
